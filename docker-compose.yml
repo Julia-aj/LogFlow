@@ -116,31 +116,37 @@ services:
       retries: 10
 
   # ---------------------------------------------------------------------------
-  # Placeholder service — Person 1 (ingestion/)
+  # Person 1 — ingestion/
   # ---------------------------------------------------------------------------
   producer:
-    image: busybox
+    build:
+      context: .
+      dockerfile: processing/Dockerfile
     container_name: logflow-producer
-    command: ["sh", "-c", "echo '[placeholder] producer not yet implemented' && sleep infinity"]
     depends_on:
       kafka-init:
         condition: service_completed_successfully
     environment:
       <<: *common-env
+      PYTHONPATH: /app
+    command: ["python", "ingestion/producer.py", "--rate", "10", "--duration", "0"]
 
   # ---------------------------------------------------------------------------
-  # Placeholder service — Person 2 (consumers/)
+  # Person 2 — consumers/
   # ---------------------------------------------------------------------------
   consumer:
-    image: busybox
+    build:
+      context: .
+      dockerfile: processing/Dockerfile
     container_name: logflow-consumer
-    command: ["sh", "-c", "echo '[placeholder] consumer not yet implemented' && sleep infinity"]
     depends_on:
       kafka-init:
         condition: service_completed_successfully
     environment:
       <<: *common-env
-
+      PYTHONPATH: /app
+      CONSUMER_ID: consumer-01
+    command: ["python", "consumers/consumer.py"]
   # ---------------------------------------------------------------------------
   # Person 3 — processing/
   # ---------------------------------------------------------------------------
@@ -160,6 +166,21 @@ services:
       <<: *common-env
       PYTHONPATH: /app
     command: ["python", "-m", "processing.api.main"]
+      
+  aggregator:
+    build:
+      context: .
+      dockerfile: processing/Dockerfile
+    container_name: logflow-aggregator
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+    environment:
+      <<: *common-env
+      PYTHONPATH: /app
+    command: ["python", "-m", "processing.aggregator"]
 
   # ---------------------------------------------------------------------------
   # Placeholder service — Person 4 (dashboard/)

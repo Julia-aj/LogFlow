@@ -59,7 +59,8 @@ from collections import defaultdict
 from datetime import datetime, timezone
 
 from confluent_kafka import Consumer, KafkaException
-from confluent_kafka.admin import AdminClient, ListConsumerGroupOffsetsRequest
+from confluent_kafka.admin import AdminClient
+from confluent_kafka import ConsumerGroupTopicPartitions
 from confluent_kafka import TopicPartition
 
 try:
@@ -397,7 +398,7 @@ def _poll_consumer_lag(admin_client: AdminClient) -> None:
     """
     try:
         # Get committed offsets for Person 2's consumer group.
-        request = ListConsumerGroupOffsetsRequest(KAFKA_CONSUMER_GROUP)
+        request = ConsumerGroupTopicPartitions(KAFKA_CONSUMER_GROUP)
         future_map = admin_client.list_consumer_group_offsets([request])
 
         committed = {}

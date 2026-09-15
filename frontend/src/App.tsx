@@ -9,6 +9,7 @@ import {
   getErrorRates,
   getThroughput,
   healthCheck,
+  getLogs,
 } from './api';
 
 type LogLevel = 'ALL' | 'INFO' | 'WARN' | 'ERROR';
@@ -464,68 +465,104 @@ function DlqPage() {
 }
 
 function LogsPage() {
-  const [logs, setLogs] = useState<LogEntry[]>(baseLogData);
+  const [logs, setLogs] = useState<LogEntry[]>([]);
   const [live, setLive] = useState(true);
   const [autoScroll, setAutoScroll] = useState(true);
   const [levelFilter, setLevelFilter] = useState<LogLevel>('ALL');
   const [serviceFilter, setServiceFilter] = useState('ALL');
   const [searchTerm, setSearchTerm] = useState('');
-  const [selectedId, setSelectedId] = useState<number | null>(baseLogData[0].id);
+  const [selectedId, setSelectedId] = useState<number | null>(null);
 
   useEffect(() => {
     if (!live) return;
-    const timer = window.setInterval(() => {
-      const level: LogEntry['level'] = Math.random() > 0.7 ? 'WARN' : 'INFO';
-      setLogs((prev) => [
-        {
-          id: prev[0] ? prev[0].id + 1 : 1,
-          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }),
-          level,
-          service: ['API', 'PAYMENT', 'DATABASE', 'AUTH'][Math.floor(Math.random() * 4)],
-          consumer: `C${Math.floor(Math.random() * 3) + 1}`,
-          trace: `tr-${Math.random().toString(16).slice(2, 7)}`,
-          message: 'Mock event received from pipeline',
-          payload: '{"mock":true,"event":"live"}',
-        },
-        ...prev,
-      ].slice(0, 14));
-    }, 3000);
+
+    const loadLogs = async () => {
+      try {
+        const response = await getLogs(50, 0);
+
+        const mappedLogs: LogEntry[] = response.logs.map((log) => ({
+          id: log.id,
+          timestamp: new Date(log.timestamp).toLocaleTimeString([], {
+            hour: '2-digit',
+            minute: '2-digit',
+            second: '2-digit',
+            hour12: false,
+          }),
+          level: log.severity === 'WARNING' ? 'WARN' : log.severity as LogEntry['level'],
+          service: log.service.toUpperCase(),
+          consumer: 'Aggregator',
+          trace: log.trace_id,
+          message: log.message,
+          payload: JSON.stringify(log, null, 2),
+        }));
+
+        setLogs(mappedLogs);
+
+        setSelectedId((current) => {
+          if (current !== null && mappedLogs.some((log) => log.id === current)) {
+            return current;
+          }
+          return mappedLogs[0]?.id ?? null;
+        });
+      } catch (error) {
+        console.error('Failed to load logs:', error);
+      }
+    };
+
+    loadLogs();
+
+    const timer = window.setInterval(loadLogs, 3000);
+
     return () => window.clearInterval(timer);
   }, [live]);
 
   const visibleLogs = useMemo(() => {
     return logs.filter((entry) => {
-      const messageMatch = searchTerm ? `${entry.message} ${entry.service} ${entry.trace}`.toLowerCase().includes(searchTerm.toLowerCase()) : true;
-      const levelMatch = levelFilter === 'ALL' || entry.level === levelFilter;
-      const serviceMatch = serviceFilter === 'ALL' || entry.service === serviceFilter;
+      const messageMatch = searchTerm
+        ? `${entry.message} ${entry.service} ${entry.trace}`
+            .toLowerCase()
+            .includes(searchTerm.toLowerCase())
+        : true;
+
+      const levelMatch =
+        levelFilter === 'ALL' || entry.level === levelFilter;
+
+      const serviceMatch =
+        serviceFilter === 'ALL' || entry.service === serviceFilter;
+
       return messageMatch && levelMatch && serviceMatch;
     });
   }, [logs, levelFilter, serviceFilter, searchTerm]);
 
-  const selectedLog = visibleLogs.find((entry) => entry.id === selectedId) ?? visibleLogs[0] ?? logs[0];
+  const selectedLog =
+    visibleLogs.find((entry) => entry.id === selectedId) ??
+    visibleLogs[0] ??
+    logs[0];
 
   const exportLogs = () => {
-    const blob = new Blob([JSON.stringify(visibleLogs, null, 2)], { type: 'application/json' });
+    const blob = new Blob(
+      [JSON.stringify(visibleLogs, null, 2)],
+      { type: 'application/json' }
+    );
+
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
+
     link.href = url;
     link.download = 'logflow-logs.json';
     link.click();
+
     URL.revokeObjectURL(url);
   };
 
   const copySelectedLog = async () => {
     if (!selectedLog) return;
+
     try {
       await navigator.clipboard.writeText(selectedLog.payload);
     } catch {
-      // ignore clipboard errors in mock mode
+      console.error('Failed to copy log JSON');
     }
-  };
-
-  const clearStream = () => {
-    setLogs([]);
-    setSelectedId(null);
   };
 
   return (
@@ -536,48 +573,139 @@ function LogsPage() {
             <h1>Live Log Stream</h1>
             <p>Real-time view of messages flowing through the LogFlow pipeline</p>
           </div>
+
           <div className="header-actions">
-            <button className="toggle-btn" onClick={() => setLive((v) => !v)}>{live ? 'LIVE' : 'PAUSED'}</button>
-            <button className="small-btn" onClick={() => setAutoScroll((v) => !v)}>{autoScroll ? 'Auto Scroll ON' : 'Auto Scroll OFF'}</button>
+            <button
+              className="toggle-btn"
+              onClick={() => setLive((v) => !v)}
+            >
+              {live ? 'LIVE' : 'PAUSED'}
+            </button>
+
+            <button
+              className="small-btn"
+              onClick={() => setAutoScroll((v) => !v)}
+            >
+              {autoScroll ? 'Auto Scroll ON' : 'Auto Scroll OFF'}
+            </button>
           </div>
         </header>
 
         <div className="stats-row">
-          <div className="mini-stat"><strong>{logs.length}</strong><span>Processed</span></div>
-          <div className="mini-stat"><strong>{logs.filter((item) => item.level === 'ERROR').length}</strong><span>Errors</span></div>
-          <div className="mini-stat"><strong>{logs.filter((item) => item.level === 'WARN').length}</strong><span>Dead Letter</span></div>
-          <div className="mini-stat"><strong>{logs.filter((item) => item.service === 'API').length}</strong><span>Active</span></div>
+          <div className="mini-stat">
+            <strong>{logs.length}</strong>
+            <span>Processed</span>
+          </div>
+
+          <div className="mini-stat">
+            <strong>
+              {logs.filter((item) => item.level === 'ERROR').length}
+            </strong>
+            <span>Errors</span>
+          </div>
+
+          <div className="mini-stat">
+            <strong>
+              {logs.filter((item) => item.level === 'WARN').length}
+            </strong>
+            <span>Warnings</span>
+          </div>
+
+          <div className="mini-stat">
+            <strong>
+              {new Set(logs.map((item) => item.service)).size}
+            </strong>
+            <span>Services</span>
+          </div>
         </div>
 
         <div className="logs-shell">
           <section className="panel stream-panel">
             <div className="stream-controls">
-              <input value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} placeholder="Search logs..." />
-              <select value={levelFilter} onChange={(e) => setLevelFilter(e.target.value as LogLevel)}>
+              <input
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                placeholder="Search logs..."
+              />
+
+              <select
+                value={levelFilter}
+                onChange={(e) =>
+                  setLevelFilter(e.target.value as LogLevel)
+                }
+              >
                 <option value="ALL">ALL</option>
                 <option value="INFO">INFO</option>
                 <option value="WARN">WARN</option>
                 <option value="ERROR">ERROR</option>
+                <option value="DEBUG">DEBUG</option>
+                <option value="CRITICAL">CRITICAL</option>
               </select>
-              <select value={serviceFilter} onChange={(e) => setServiceFilter(e.target.value)}>
+
+              <select
+                value={serviceFilter}
+                onChange={(e) => setServiceFilter(e.target.value)}
+              >
                 <option value="ALL">ALL SERVICES</option>
-                {Array.from(new Set(logs.map((item) => item.service))).map((service) => (
-                  <option key={service} value={service}>{service}</option>
+
+                {Array.from(
+                  new Set(logs.map((item) => item.service))
+                ).map((service) => (
+                  <option key={service} value={service}>
+                    {service}
+                  </option>
                 ))}
               </select>
-              <button className="ghost-btn" onClick={clearStream}>Clear Stream</button>
-              <button className="ghost-btn" onClick={exportLogs}>Export</button>
+
+              <button
+                className="ghost-btn"
+                onClick={() => setLogs([])}
+              >
+                Clear Stream
+              </button>
+
+              <button
+                className="ghost-btn"
+                onClick={exportLogs}
+              >
+                Export
+              </button>
             </div>
+
             <div className="log-table-wrap">
               <table className="log-table">
                 <thead>
-                  <tr><th>Timestamp</th><th>Level</th><th>Service</th><th>Consumer</th><th>Trace</th><th>Message</th></tr>
+                  <tr>
+                    <th>Timestamp</th>
+                    <th>Level</th>
+                    <th>Service</th>
+                    <th>Consumer</th>
+                    <th>Trace</th>
+                    <th>Message</th>
+                  </tr>
                 </thead>
+
                 <tbody>
                   {visibleLogs.map((row) => (
-                    <tr key={row.id} className={selectedId === row.id ? 'selected-row' : ''} onClick={() => setSelectedId(row.id)}>
+                    <tr
+                      key={row.id}
+                      className={
+                        selectedId === row.id
+                          ? 'selected-row'
+                          : ''
+                      }
+                      onClick={() => setSelectedId(row.id)}
+                    >
                       <td>{row.timestamp}</td>
-                      <td><span className={`level level-${row.level.toLowerCase()}`}>{row.level}</span></td>
+
+                      <td>
+                        <span
+                          className={`level level-${row.level.toLowerCase()}`}
+                        >
+                          {row.level}
+                        </span>
+                      </td>
+
                       <td>{row.service}</td>
                       <td>{row.consumer}</td>
                       <td>{row.trace}</td>
@@ -591,21 +719,58 @@ function LogsPage() {
 
           <aside className="side-panel log-detail">
             <div className="detail-card">
-              <div className="detail-header">Log Event Details</div>
+              <div className="detail-header">
+                Log Event Details
+              </div>
+
               {selectedLog ? (
                 <>
-                  <div className="detail-key">Timestamp <span>{selectedLog.timestamp}</span></div>
-                  <div className="detail-key">Service <span>{selectedLog.service}</span></div>
-                  <div className="detail-key">Consumer <span>{selectedLog.consumer}</span></div>
-                  <div className="detail-key">Trace ID <span>{selectedLog.trace}</span></div>
-                  <div className="preview-box small"><code>{selectedLog.payload}</code></div>
+                  <div className="detail-key">
+                    Timestamp
+                    <span>{selectedLog.timestamp}</span>
+                  </div>
+
+                  <div className="detail-key">
+                    Service
+                    <span>{selectedLog.service}</span>
+                  </div>
+
+                  <div className="detail-key">
+                    Consumer
+                    <span>{selectedLog.consumer}</span>
+                  </div>
+
+                  <div className="detail-key">
+                    Trace ID
+                    <span>{selectedLog.trace}</span>
+                  </div>
+
+                  <div className="preview-box small">
+                    <code>{selectedLog.payload}</code>
+                  </div>
+
                   <div className="detail-actions">
-                    <button className="mini-button" onClick={copySelectedLog}>Copy JSON</button>
-                    <button className="mini-button alt" onClick={() => window.location.assign('/dlq')}>View in DLQ</button>
+                    <button
+                      className="mini-button"
+                      onClick={copySelectedLog}
+                    >
+                      Copy JSON
+                    </button>
+
+                    <button
+                      className="mini-button alt"
+                      onClick={() =>
+                        window.location.assign('/dlq')
+                      }
+                    >
+                      View in DLQ
+                    </button>
                   </div>
                 </>
               ) : (
-                <div className="empty-state">No log selected</div>
+                <div className="empty-state">
+                  No log selected
+                </div>
               )}
             </div>
           </aside>

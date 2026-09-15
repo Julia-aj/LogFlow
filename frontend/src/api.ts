@@ -100,6 +100,23 @@ export type HealthResponse = {
   database: string;
   error?: string;
 };
+export type LogRecord = {
+  id: number;
+  ingested_at: string;
+  timestamp: string;
+  service: string;
+  severity: string;
+  message: string;
+  trace_id: string;
+};
+
+export type LogsResponse = {
+  logs: LogRecord[];
+};
+
+export function getLogs(limit = 50, offset = 0): Promise<LogsResponse> {
+  return apiFetch<LogsResponse>('/logs', { limit, offset });
+}
 
 async function apiFetch<T>(
   path: string,
