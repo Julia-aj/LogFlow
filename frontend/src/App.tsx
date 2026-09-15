@@ -45,26 +45,18 @@ const navItems = [
 ];
 
 const initialBaseMetrics = [
-  { label: 'System', value: '5/5', status: 'Healthy' },
-  { label: 'AI pipeline', value: 'Normal', status: 'Healthy' },
-  { label: 'Consumer', value: '3 / 3', status: 'Active' },
-  { label: 'Kafka', value: 'Online', status: 'Healthy' },
-  { label: 'API', value: 'Online', status: 'Healthy' },
-  { label: 'Database', value: 'Online', status: 'Healthy' },
+  { label: 'System', value: 'Loading', status: 'Unknown' },
+  { label: 'AI pipeline', value: 'Loading', status: 'Unknown' },
+  { label: 'Consumer', value: 'Loading', status: 'Unknown' },
+  { label: 'Kafka', value: 'Unavailable', status: 'Unknown' },
+  { label: 'API', value: 'Loading', status: 'Unknown' },
+  { label: 'Database', value: 'Loading', status: 'Unknown' },
 ];
 
 const overviewConsumerCards = [
   { id: 'C1', status: 'RUNNING', rate: '742/s', lag: '124' },
   { id: 'C2', status: 'RUNNING', rate: '811/s', lag: '87' },
   { id: 'C3', status: 'RUNNING', rate: '631/s', lag: '131' },
-];
-
-const baseEvents = [
-  { ts: '18:59:42', service: 'INFO', text: 'Consumer 3 heartbeat received' },
-  { ts: '18:59:37', service: 'INFO', text: 'Consumer 2 rebalanced automatically' },
-  { ts: '18:59:39', service: 'WARN', text: 'Partition 2 lag spike detected' },
-  { ts: '18:59:45', service: 'ERROR', text: 'Consumer 1 retry queue exceeded threshold' },
-  { ts: '18:59:52', service: 'INFO', text: 'Kafka cluster state stable' },
 ];
 
 const baseDlqData: DlqEntry[] = [
@@ -136,6 +128,7 @@ function OverviewPage() {
   const [throughput, setThroughput] = useState<Awaited<ReturnType<typeof getThroughput>> | null>(null);
   const [errorRates, setErrorRates] = useState<Awaited<ReturnType<typeof getErrorRates>> | null>(null);
   const [dlq, setDlq] = useState<Awaited<ReturnType<typeof getDlqMessages>> | null>(null);
+  const [lastRefresh, setLastRefresh] = useState<Date | null>(null);
   const refreshOverview = async () => {
     try {
       const [healthData, consumerData, throughputData, lagData, errorData, dlqData] =
@@ -166,13 +159,13 @@ function OverviewPage() {
       },
       {
         label: 'Consumer',
-        value: `${consumerData.consumer.status === 'RUNNING' ? 1 : 0} / 1`,
+        value: consumerData.consumer.status,
         status: consumerData.consumer.status === 'RUNNING' ? 'Active' : 'Inactive',
       },
       {
         label: 'Kafka',
-        value: 'Online',
-        status: 'Healthy',
+        value: 'Unavailable',
+        status: 'Unknown',
       },
       {
         label: 'API',
@@ -185,6 +178,7 @@ function OverviewPage() {
         status: healthData.database === 'connected' ? 'Healthy' : 'Warning',
       },
     ]);
+    setLastRefresh(new Date());
   } catch (error) {
     console.error('Failed to refresh overview:', error);
   }
@@ -192,6 +186,7 @@ function OverviewPage() {
 useEffect(() => {
   refreshOverview();
 }, []);
+  const refreshAgeMinutes = lastRefresh ? Math.floor((Date.now() - lastRefresh.getTime()) / 60000) : null;
 
   return (
     <AppShell>
@@ -203,7 +198,7 @@ useEffect(() => {
           </div>
           <div className="header-actions">
             <span className="pill live">● LIVE</span>
-            <span className="pill muted">Updated 2s ago</span>
+            <span className="pill muted">{refreshAgeMinutes == null ? 'Not updated' : `Updated ${refreshAgeMinutes === 0 ? 'just now' : `${refreshAgeMinutes}m ago`}`}</span>
             <span className="pill muted">Last 5 minutes</span>
             <button className="small-btn" onClick={refreshOverview}>Refresh</button>
           </div>
@@ -223,7 +218,7 @@ useEffect(() => {
           <section className="panel chart-panel">
             <div className="panel-title-row">
               <span>THROUGHPUT</span>
-              <span className="status-tag healthy">● HEALTHY</span>
+              <span className="status-tag">Status unavailable</span>
             </div>
             <div className="big-number">
               {throughput?.summary.current_rate.toLocaleString() ?? '0' } <span>msg/s</span>
@@ -240,7 +235,7 @@ useEffect(() => {
           <section className="panel">
             <div className="panel-title-row">
               <span>CONSUMER LAG</span>
-              <span className="status-tag healthy">● HEALTHY</span>
+              <span className="status-tag">Status unavailable</span>
             </div>
             <div className="bars-stack">
               {consumerStatus?.partitions.map((partition) => (
@@ -262,7 +257,7 @@ useEffect(() => {
           <section className="panel chart-panel">
             <div className="panel-title-row">
               <span>ERROR RATE</span>
-              <span className="status-tag healthy">● HEALTHY</span>
+              <span className="status-tag">Status unavailable</span>
             </div>
             <div className="big-number small">
               {errorRates?.summary.overall_error_rate_pct != null ? `${errorRates.summary.overall_error_rate_pct}%` : '--'}
@@ -279,11 +274,7 @@ useEffect(() => {
               <span className="status-tag danger">● ATTENTION</span>
             </div>
             <div className="big-number small red">{dlq?.total ?? 0}</div>
-            <div className="queue-bars">
-              <span style={{ width: '88%' }} />
-              <span style={{ width: '72%' }} />
-              <span style={{ width: '65%' }} />
-            </div>
+            <div className="queue-bars">Queue distribution unavailable</div>
             <div className="inline-action-row">
               <button className="ghost-btn" onClick={() => navigate('/dlq')}>View DLQ</button>
             </div>
@@ -305,21 +296,17 @@ useEffect(() => {
           </section>
 
           <section className="panel recent-panel">
-            <div className="panel-title-row"><span>RECENT EVENTS</span><span className="status-tag info">LIVE</span></div>
-            <ul className="event-list">
-              {baseEvents.map((row, idx) => (
-                <li key={idx}><span className="event-time">{row.ts}</span><span className={`event-service ${row.service.toLowerCase()}`}>{row.service}</span><span>{row.text}</span></li>
-              ))}
-            </ul>
+            <div className="panel-title-row"><span>RECENT EVENTS</span></div>
+            <div className="empty-state">Recent event data unavailable</div>
           </section>
         </div>
 
         <div className="bottom-bar">
-          {['LOG GENERATOR', 'CONSUMERS', 'PROCESSING', 'POSTGRES'].map((label, idx) => (
+          {['LOG GENERATOR', 'CONSUMERS', 'PROCESSING', 'POSTGRES'].map((label) => (
             <div key={label} className="pipeline-card">
               <span>{label}</span>
-              <strong>{idx === 0 || idx === 1 ? '2,184/s' : '2,102/s'}</strong>
-              <small>ONLINE</small>
+              <strong>Unavailable</strong>
+              <small>Unavailable</small>
             </div>
           ))}
         </div>
