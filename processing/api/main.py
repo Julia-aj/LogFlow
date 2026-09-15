@@ -86,6 +86,7 @@ app = FastAPI(
 # ---------------------------------------------------------------------------
 _allowed_origins = [
     "http://localhost:5173",
+    "http://localhost:5174",
     os.environ.get("VITE_API_BASE_URL", "http://localhost:8000"),
 ]
 
