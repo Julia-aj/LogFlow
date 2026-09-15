@@ -2,6 +2,14 @@ import { useEffect, useMemo, useState } from 'react';
 import { NavLink, Route, Routes, useNavigate } from 'react-router-dom';
 import ConsumersPage from './pages/ConsumersPage';
 import DlqInspectorPage from './pages/DlqInspectorPage';
+import {
+  getConsumerLag,
+  getConsumerStatus,
+  getDlqMessages,
+  getErrorRates,
+  getThroughput,
+  healthCheck,
+} from './api';
 
 type LogLevel = 'ALL' | 'INFO' | 'WARN' | 'ERROR';
 type LogEntry = {
@@ -123,17 +131,67 @@ function AppShell({ children }: { children: React.ReactNode }) {
 function OverviewPage() {
   const navigate = useNavigate();
   const [metrics, setMetrics] = useState(initialBaseMetrics);
+  const [health, setHealth] = useState<Awaited<ReturnType<typeof healthCheck>> | null>(null);
+  const [consumerStatus, setConsumerStatus] = useState<Awaited<ReturnType<typeof getConsumerStatus>> | null>(null);
+  const [throughput, setThroughput] = useState<Awaited<ReturnType<typeof getThroughput>> | null>(null);
+  const [errorRates, setErrorRates] = useState<Awaited<ReturnType<typeof getErrorRates>> | null>(null);
+  const [dlq, setDlq] = useState<Awaited<ReturnType<typeof getDlqMessages>> | null>(null);
+  const refreshOverview = async () => {
+    try {
+      const [healthData, consumerData, throughputData, lagData, errorData, dlqData] =
+      await Promise.all([
+        healthCheck(),
+        getConsumerStatus(),
+        getThroughput(5),
+        getConsumerLag(),
+        getErrorRates(5),
+        getDlqMessages(),
+      ]);
+    setHealth(healthData);
+    setConsumerStatus(consumerData);
+    setThroughput(throughputData);
+    setErrorRates(errorData);
+    setDlq(dlqData);
 
-  const refreshOverview = () => {
-    const next = [...initialBaseMetrics].map((item, idx) => {
-      if (idx === 0) return { ...item, value: `${Math.max(3, Math.min(5, Math.floor(Math.random() * 5) + 1))}/5` };
-      if (idx === 2) return { ...item, value: `${Math.floor(Math.random() * 3) + 1} / 3` };
-      if (idx === 3) return { ...item, value: Math.random() > 0.7 ? 'Paused' : 'Online' };
-      if (idx === 4) return { ...item, value: Math.random() > 0.7 ? 'Degraded' : 'Online' };
-      return item;
-    });
-    setMetrics(next);
-  };
+    setMetrics([
+      {
+        label: 'System',
+        value: `${consumerData.partitions.filter((p) => p.health === 'HEALTHY').length}/${consumerData.partitions.length}`,
+        status: 'Healthy',
+      },
+      {
+        label: 'AI pipeline',
+        value: consumerData.consumer.status,
+        status: consumerData.consumer.status === 'RUNNING' ? 'Healthy' : 'Warning',
+      },
+      {
+        label: 'Consumer',
+        value: `${consumerData.consumer.status === 'RUNNING' ? 1 : 0} / 1`,
+        status: consumerData.consumer.status === 'RUNNING' ? 'Active' : 'Inactive',
+      },
+      {
+        label: 'Kafka',
+        value: 'Online',
+        status: 'Healthy',
+      },
+      {
+        label: 'API',
+        value: healthData.status === 'ok' ? 'Online' : 'Degraded',
+        status: healthData.status === 'ok' ? 'Healthy' : 'Warning',
+      },
+      {
+        label: 'Database',
+        value: healthData.database === 'connected' ? 'Online' : 'Degraded',
+        status: healthData.database === 'connected' ? 'Healthy' : 'Warning',
+      },
+    ]);
+  } catch (error) {
+    console.error('Failed to refresh overview:', error);
+  }
+};
+useEffect(() => {
+  refreshOverview();
+}, []);
 
   return (
     <AppShell>
@@ -167,10 +225,16 @@ function OverviewPage() {
               <span>THROUGHPUT</span>
               <span className="status-tag healthy">● HEALTHY</span>
             </div>
-            <div className="big-number">2,184 <span>msg/s</span></div>
-            <div className="mini-change">+8.6% vs previous period</div>
+            <div className="big-number">
+              {throughput?.summary.current_rate.toLocaleString() ?? '0' } <span>msg/s</span>
+            </div>
+            <div className="mini-change">
+              Peak {throughput?.summary.peak_rate.toLocaleString() ?? '0' } msg/s
+            </div>
             <div className="sparkline spark-green" />
-            <div className="axis">Peak 4.42s, Avg 2.21s, Log 2.18s</div>
+            <div className="axis">
+              Avg {throughput?.summary.average_rate.toLocaleString() ?? '0' } msg/s
+            </div>
           </section>
 
           <section className="panel">
@@ -179,9 +243,19 @@ function OverviewPage() {
               <span className="status-tag healthy">● HEALTHY</span>
             </div>
             <div className="bars-stack">
-              <div className="bar-row"><span>P1</span><div className="bar"><i style={{ width: '88%' }} /></div><span>91</span></div>
-              <div className="bar-row"><span>P2</span><div className="bar"><i style={{ width: '75%' }} /></div><span>87</span></div>
-              <div className="bar-row"><span>P3</span><div className="bar"><i style={{ width: '60%' }} /></div><span>124</span></div>
+              {consumerStatus?.partitions.map((partition) => (
+                <div className="bar-row" key={partition.partition}>
+                  <span>P{partition.partition}</span>
+                  <div className="bar">
+                    <i
+                    style={{
+                      width: `${Math.min(100, partition.current_lag)}%`,
+                    }}
+                    />
+                  </div>
+                  <span>{partition.current_lag}</span>
+                </div>
+              ))}
             </div>
           </section>
 
@@ -190,7 +264,9 @@ function OverviewPage() {
               <span>ERROR RATE</span>
               <span className="status-tag healthy">● HEALTHY</span>
             </div>
-            <div className="big-number small">0.42% </div>
+            <div className="big-number small">
+              {errorRates?.summary.overall_error_rate_pct != null ? `${errorRates.summary.overall_error_rate_pct}%` : '--'}
+            </div>
             <div className="tiny-legend">
               <span>API</span><span>Payment</span><span>Auth</span><span>Database</span>
             </div>
@@ -202,7 +278,7 @@ function OverviewPage() {
               <span>DEAD LETTER QUEUE</span>
               <span className="status-tag danger">● ATTENTION</span>
             </div>
-            <div className="big-number small red">127</div>
+            <div className="big-number small red">{dlq?.total ?? 0}</div>
             <div className="queue-bars">
               <span style={{ width: '88%' }} />
               <span style={{ width: '72%' }} />
@@ -216,15 +292,15 @@ function OverviewPage() {
           <section className="panel wide-panel">
             <div className="panel-title-row"><span>CONSUMER HEALTH</span></div>
             <div className="three-cards">
-              {overviewConsumerCards.map((item) => (
-                <button type="button" key={item.id} className="health-card clickable-card" onClick={() => navigate('/consumers')}>
-                  <div className="health-header"><span className="dot green"/> {item.id} <span className="status-tag running">{item.status}</span></div>
+              {consumerStatus?.consumer && (
+                <button type="button" key={consumerStatus.consumer.consumer_id} className="health-card clickable-card" onClick={() => navigate('/consumers')}>
+                  <div className="health-header"><span className="dot green"/> {consumerStatus.consumer.consumer_id} <span className="status-tag running">{consumerStatus.consumer.status}</span></div>
                   <div className="health-metrics">
-                    <div><strong>{item.rate}</strong><span>Processing rate</span></div>
-                    <div><strong>{item.lag}</strong><span>Lag</span></div>
+                    <div><strong>{consumerStatus.consumer.processing_rate}</strong><span>Processing rate</span></div>
+                    <div><strong>{consumerStatus.consumer.consumer_lag}</strong><span>Lag</span></div>
                   </div>
                 </button>
-              ))}
+              )}
             </div>
           </section>
 
