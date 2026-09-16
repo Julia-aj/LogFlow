@@ -53,6 +53,54 @@ export type ConsumerStatusResponse = {
   };
 };
 
+export type ThroughputWindow = {
+  window_start: string;
+  window_end: string;
+  service: string;
+  message_count: number;
+  messages_per_sec: number;
+};
+
+export type ThroughputResponse = {
+  windows: ThroughputWindow[];
+  summary: {
+    current_rate: number;
+    peak_rate: number;
+    average_rate: number;
+    total_windows: number;
+  };
+};
+
+export type ErrorRateWindow = {
+  window_start: string;
+  window_end: string;
+  service: string;
+  total_messages: number;
+  error_messages: number;
+  error_rate_pct: number;
+};
+
+export type ErrorRateResponse = {
+  windows: ErrorRateWindow[];
+  summary: {
+    overall_error_rate_pct: number;
+    total_messages: number;
+    total_errors: number;
+    per_service: Array<{
+      service: string;
+      total_messages: number;
+      error_messages: number;
+      error_rate_pct: number;
+    }>;
+  };
+};
+
+export type HealthResponse = {
+  status: string;
+  database: string;
+  error?: string;
+};
+
 async function apiFetch<T>(path: string, params: Record<string, string | number> = {}): Promise<T> {
   const url = new URL(path, API_BASE_URL);
   Object.entries(params).forEach(([key, value]) => url.searchParams.set(key, String(value)));
@@ -69,6 +117,22 @@ async function apiFetch<T>(path: string, params: Record<string, string | number>
   return response.json() as Promise<T>;
 }
 
+export function getHealth(): Promise<HealthResponse> {
+  return apiFetch<HealthResponse>('/health');
+}
+
+export function getThroughput(minutes = 60, service?: string): Promise<ThroughputResponse> {
+  const params: Record<string, string | number> = { minutes };
+  if (service) params.service = service;
+  return apiFetch<ThroughputResponse>('/metrics/throughput', params);
+}
+
+export function getErrorRates(minutes = 60, service?: string): Promise<ErrorRateResponse> {
+  const params: Record<string, string | number> = { minutes };
+  if (service) params.service = service;
+  return apiFetch<ErrorRateResponse>('/metrics/errors', params);
+}
+
 export function getConsumerLag(): Promise<ConsumerLagResponse> {
   return apiFetch<ConsumerLagResponse>('/metrics/lag');
 }
@@ -80,3 +144,4 @@ export function getDlqMessages(limit = 50, offset = 0): Promise<DlqResponse> {
 export function getConsumerStatus(): Promise<ConsumerStatusResponse> {
   return apiFetch<ConsumerStatusResponse>('/metrics/consumers');
 }
+

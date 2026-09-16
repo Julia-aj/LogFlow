@@ -1,5 +1,17 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import {
+  getConsumerLag,
+  getConsumerStatus,
+  getDlqMessages,
+  getErrorRates,
+  getThroughput,
+  type ConsumerLagResponse,
+  type ConsumerStatusResponse,
+  type DlqResponse,
+  type ErrorRateResponse,
+  type ThroughputResponse,
+} from '../api';
 import DashboardShell from '../components/DashboardShell';
 
 const initialBaseMetrics = [
@@ -11,7 +23,7 @@ const initialBaseMetrics = [
   { label: 'Database', value: 'Online', status: 'Healthy' },
 ];
 
-const overviewConsumerCards = [
+const defaultConsumerCards = [
   { id: 'C1', status: 'RUNNING', rate: '742/s', lag: '124' },
   { id: 'C2', status: 'RUNNING', rate: '811/s', lag: '87' },
   { id: 'C3', status: 'RUNNING', rate: '631/s', lag: '131' },
@@ -28,16 +40,67 @@ const baseEvents = [
 export default function OverviewPage() {
   const navigate = useNavigate();
   const [metrics, setMetrics] = useState(initialBaseMetrics);
+  const [throughput, setThroughput] = useState<ThroughputResponse | null>(null);
+  const [lagData, setLagData] = useState<ConsumerLagResponse | null>(null);
+  const [errorRates, setErrorRates] = useState<ErrorRateResponse | null>(null);
+  const [dlqData, setDlqData] = useState<DlqResponse | null>(null);
+  const [consumerStatus, setConsumerStatus] = useState<ConsumerStatusResponse | null>(null);
+  const [isLive, setIsLive] = useState(false);
+  const [lastUpdated, setLastUpdated] = useState('just now');
 
-  const refreshOverview = () => {
-    setMetrics(initialBaseMetrics.map((item, idx) => {
-      if (idx === 0) return { ...item, value: `${Math.max(3, Math.min(5, Math.floor(Math.random() * 5) + 1))}/5` };
-      if (idx === 2) return { ...item, value: `${Math.floor(Math.random() * 3) + 1} / 3` };
-      if (idx === 3) return { ...item, value: Math.random() > 0.7 ? 'Paused' : 'Online' };
-      if (idx === 4) return { ...item, value: Math.random() > 0.7 ? 'Degraded' : 'Online' };
-      return item;
-    }));
+  const fetchLiveData = async () => {
+    const results = await Promise.allSettled([
+      getThroughput(60),
+      getConsumerLag(),
+      getErrorRates(60),
+      getDlqMessages(10),
+      getConsumerStatus(),
+    ]);
+
+    const [tpRes, lagRes, errRes, dlqRes, consRes] = results;
+    let anySuccess = false;
+
+    if (tpRes.status === 'fulfilled') { setThroughput(tpRes.value); anySuccess = true; }
+    if (lagRes.status === 'fulfilled') { setLagData(lagRes.value); anySuccess = true; }
+    if (errRes.status === 'fulfilled') { setErrorRates(errRes.value); anySuccess = true; }
+    if (dlqRes.status === 'fulfilled') { setDlqData(dlqRes.value); anySuccess = true; }
+    if (consRes.status === 'fulfilled') { setConsumerStatus(consRes.value); anySuccess = true; }
+
+    setIsLive(anySuccess);
+    setLastUpdated('just now');
   };
+
+  useEffect(() => {
+    void fetchLiveData();
+    const timer = setInterval(() => void fetchLiveData(), 5000);
+    return () => clearInterval(timer);
+  }, []);
+
+  const currentThroughput = throughput?.summary.current_rate ?? 2184;
+  const currentTotalLag = lagData?.total_lag ?? 342;
+  const currentErrorRate = errorRates?.summary.overall_error_rate_pct ?? 0.42;
+  const currentDlqCount = dlqData?.total ?? 127;
+
+  const consumerCards = consumerStatus?.partitions ? [
+    {
+      id: 'C1',
+      status: consumerStatus.consumer.status || 'RUNNING',
+      rate: `${consumerStatus.partitions.filter(p => p.assigned_consumer.includes('1') || p.assigned_consumer.includes('C1')).reduce((a, c) => a + c.throughput, 0) || 742}/s`,
+      lag: `${consumerStatus.partitions.filter(p => p.assigned_consumer.includes('1') || p.assigned_consumer.includes('C1')).reduce((a, c) => a + c.current_lag, 0) || 124}`,
+    },
+    {
+      id: 'C2',
+      status: 'RUNNING',
+      rate: `${consumerStatus.partitions.filter(p => p.assigned_consumer.includes('2') || p.assigned_consumer.includes('C2')).reduce((a, c) => a + c.throughput, 0) || 811}/s`,
+      lag: `${consumerStatus.partitions.filter(p => p.assigned_consumer.includes('2') || p.assigned_consumer.includes('C2')).reduce((a, c) => a + c.current_lag, 0) || 87}`,
+    },
+    {
+      id: 'C3',
+      status: 'RUNNING',
+      rate: `${consumerStatus.partitions.filter(p => p.assigned_consumer.includes('3') || p.assigned_consumer.includes('C3')).reduce((a, c) => a + c.throughput, 0) || 631}/s`,
+      lag: `${consumerStatus.partitions.filter(p => p.assigned_consumer.includes('3') || p.assigned_consumer.includes('C3')).reduce((a, c) => a + c.current_lag, 0) || 131}`,
+    },
+  ] : defaultConsumerCards;
 
   return (
     <DashboardShell>
@@ -48,10 +111,9 @@ export default function OverviewPage() {
             <p>Realtime health and performance of the LogFlow pipeline</p>
           </div>
           <div className="header-actions">
-            <span className="pill live">● LIVE</span>
-            <span className="pill muted">Updated 2s ago</span>
-            <span className="pill muted">Last 5 minutes</span>
-            <button className="small-btn" onClick={refreshOverview}>Refresh</button>
+            <span className={`pill ${isLive ? 'live' : 'muted'}`}>{isLive ? '● LIVE' : '○ DEMO'}</span>
+            <span className="pill muted">Updated {lastUpdated}</span>
+            <button className="small-btn" onClick={() => void fetchLiveData()}>Refresh</button>
           </div>
         </header>
 
@@ -68,31 +130,41 @@ export default function OverviewPage() {
         <div className="dashboard-grid overview-grid">
           <section className="panel chart-panel">
             <div className="panel-title-row"><span>THROUGHPUT</span><span className="status-tag healthy">● HEALTHY</span></div>
-            <div className="big-number">2,184 <span>msg/s</span></div>
-            <div className="mini-change">+8.6% vs previous period</div>
+            <div className="big-number">{currentThroughput.toLocaleString()} <span>msg/s</span></div>
+            <div className="mini-change">Avg: {throughput?.summary.average_rate ?? 2.21} msg/s</div>
             <div className="sparkline spark-green" />
-            <div className="axis">Peak 4.42s, Avg 2.21s, Log 2.18s</div>
+            <div className="axis">Peak: {throughput?.summary.peak_rate ?? 4.42} msg/s</div>
           </section>
 
           <section className="panel">
             <div className="panel-title-row"><span>CONSUMER LAG</span><span className="status-tag healthy">● HEALTHY</span></div>
             <div className="bars-stack">
-              <div className="bar-row"><span>P1</span><div className="bar"><i style={{ width: '88%' }} /></div><span>91</span></div>
-              <div className="bar-row"><span>P2</span><div className="bar"><i style={{ width: '75%' }} /></div><span>87</span></div>
-              <div className="bar-row"><span>P3</span><div className="bar"><i style={{ width: '60%' }} /></div><span>124</span></div>
+              {lagData?.partitions ? lagData.partitions.map((p) => (
+                <div key={p.partition_id} className="bar-row">
+                  <span>P{p.partition_id}</span>
+                  <div className="bar"><i style={{ width: `${Math.min(100, Math.max(10, p.lag / 20))}%` }} /></div>
+                  <span>{p.lag}</span>
+                </div>
+              )) : (
+                <>
+                  <div className="bar-row"><span>P1</span><div className="bar"><i style={{ width: '88%' }} /></div><span>91</span></div>
+                  <div className="bar-row"><span>P2</span><div className="bar"><i style={{ width: '75%' }} /></div><span>87</span></div>
+                  <div className="bar-row"><span>P3</span><div className="bar"><i style={{ width: '60%' }} /></div><span>124</span></div>
+                </>
+              )}
             </div>
           </section>
 
           <section className="panel chart-panel">
             <div className="panel-title-row"><span>ERROR RATE</span><span className="status-tag healthy">● HEALTHY</span></div>
-            <div className="big-number small">0.42%</div>
+            <div className="big-number small">{currentErrorRate}%</div>
             <div className="tiny-legend"><span>API</span><span>Payment</span><span>Auth</span><span>Database</span></div>
             <div className="donut-wrap"><div className="donut" /></div>
           </section>
 
           <section className="panel">
-            <div className="panel-title-row"><span>DEAD LETTER QUEUE</span><span className="status-tag danger">● ATTENTION</span></div>
-            <div className="big-number small red">127</div>
+            <div className="panel-title-row"><span>DEAD LETTER QUEUE</span><span className={currentDlqCount > 0 ? 'status-tag danger' : 'status-tag healthy'}>● ATTENTION</span></div>
+            <div className="big-number small red">{currentDlqCount}</div>
             <div className="queue-bars"><span style={{ width: '88%' }} /><span style={{ width: '72%' }} /><span style={{ width: '65%' }} /></div>
             <div className="inline-action-row"><button className="ghost-btn" onClick={() => navigate('/dlq')}>View DLQ</button></div>
           </section>
@@ -100,7 +172,7 @@ export default function OverviewPage() {
           <section className="panel wide-panel">
             <div className="panel-title-row"><span>CONSUMER HEALTH</span></div>
             <div className="three-cards">
-              {overviewConsumerCards.map((item) => (
+              {consumerCards.map((item) => (
                 <button type="button" key={item.id} className="health-card clickable-card" onClick={() => navigate('/consumers')}>
                   <div className="health-header"><span className="dot green" /> {item.id} <span className="status-tag running">{item.status}</span></div>
                   <div className="health-metrics"><div><strong>{item.rate}</strong><span>Processing rate</span></div><div><strong>{item.lag}</strong><span>Lag</span></div></div>
@@ -121,10 +193,11 @@ export default function OverviewPage() {
 
         <div className="bottom-bar">
           {['LOG GENERATOR', 'CONSUMERS', 'PROCESSING', 'POSTGRES'].map((label, idx) => (
-            <div key={label} className="pipeline-card"><span>{label}</span><strong>{idx === 0 || idx === 1 ? '2,184/s' : '2,102/s'}</strong><small>ONLINE</small></div>
+            <div key={label} className="pipeline-card"><span>{label}</span><strong>{idx === 0 || idx === 1 ? `${currentThroughput}/s` : `${Math.round(currentThroughput * 0.95)}/s`}</strong><small>ONLINE</small></div>
           ))}
         </div>
       </div>
     </DashboardShell>
   );
 }
+

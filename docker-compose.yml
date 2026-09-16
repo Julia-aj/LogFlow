@@ -118,12 +118,14 @@ services:
       retries: 10
 
   # ---------------------------------------------------------------------------
-  # Placeholder service — Person 1 (ingestion/)
+  # Person 1 — ingestion/
   # ---------------------------------------------------------------------------
   producer:
-    image: busybox
+    build:
+      context: .
+      dockerfile: ingestion/Dockerfile
     container_name: logflow-producer
-    command: ["sh", "-c", "echo '[placeholder] producer not yet implemented' && sleep infinity"]
+    command: ["--scenario", "normal", "--rate", "50"]
     depends_on:
       kafka-init:
         condition: service_completed_successfully
@@ -220,18 +222,22 @@ services:
     command: ["python", "-m", "processing.aggregator"]
 
   # ---------------------------------------------------------------------------
-  # Placeholder service — Person 4 (dashboard/)
+  # Person 4 — frontend dashboard
   # ---------------------------------------------------------------------------
   dashboard:
-    image: busybox
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
     container_name: logflow-dashboard
-    command: ["sh", "-c", "echo '[placeholder] dashboard not yet implemented' && sleep infinity"]
     ports:
-      - "5173:5173"
+      - "5173:80"
+    depends_on:
+      processing:
+        condition: service_healthy
     environment:
       <<: *common-env
 
 volumes:
   kafka-data:
   postgres-data:
-  consumer-status:
+  consumer-status:
